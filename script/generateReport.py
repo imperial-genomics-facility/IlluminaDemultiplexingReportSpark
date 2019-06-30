@@ -1,41 +1,19 @@
 import sys,os
 import pandas as pd
+from pyspark.sql.types import StructField,StructType,StringType,IntegerType
+from pyspark.sql.types import StructField,StructType,StringType,IntegerType
+from pyspark.sql.types import ArrayType,LongType,BooleanType,MapType
 from jinja2 import Template,Environment, FileSystemLoader, select_autoescape
+from pyspark.sql.functions import explode,get_json_object,json_tuple,size,col,from_json,to_json,create_map
+
 
 template_path = ''
 file_list = ''
 output_report = ''
 
-if __name__=='__main__':
-  try:
-    from pyspark.sql import SparkSession
-    from pyspark.sql.types import StructField,StructType,StringType,IntegerType
-    from pyspark.sql.types import ArrayType,LongType,BooleanType,MapType
-    from pyspark.sql.functions import explode,get_json_object,json_tuple,size,col,from_json,to_json,create_map
-    env = \
-      Environment(\
-        loader=FileSystemLoader(\
-          searchpath=os.path.dirname(template_path)),
-        autoescape=select_autoescape(['xml']))
-    template = \
-      env.get_template(\
-        os.path.basename(template_path))
-
-    data_list = \
-      pd.read_csv(\
-        file_list,
-        header=None,
-        names=['file'])
-
-    files = list(data_list['file'].values)
-    spark = \
-      SparkSession.\
-        builder.\
-        master('local').\
-        appName('GenerateDe-multiplexingReport').\
-        getOrCreate()
-
-    schema = StructType([
+def get_json_schema():
+  schema = \
+      StructType([
         StructField("Flowcell",StringType(),True),
         StructField("RunNumber",IntegerType(),True),
         StructField("RunId",StringType(),True),
@@ -100,8 +78,46 @@ if __name__=='__main__':
         StructField("UnknownBarcodes",
            ArrayType(MapType(StringType(),StringType(),True)),
         True)
-    ])
+      ])
+  return schema
+
+def generateFormattedReport(template_path,output_report,title,barcode_stats,
+                            undetermined_barcode_stats):
+  try:
+    env = \
+      Environment(\
+        loader=FileSystemLoader(\
+          searchpath=os.path.dirname(template_path)),
+        autoescape=select_autoescape(['xml']))
+    template = \
+      env.get_template(\
+        os.path.basename(template_path))
+    template.\
+      stream(\
+        title=title,
+        barcode_stats=barcode_stats,
+        undetermined_barcode_stats=undetermined_barcode_stats).\
+      dump(output_report)
+  except:
+    raise
+
+def get_file_list(file_list):
+  try:
+    data_list = \
+      pd.read_csv(\
+        file_list,
+        header=None,
+        names=['file'])
+    files = list(data_list['file'].values)
+    return files
+  except:
+    raise
+
+def get_demultiplexing_stats_from_json(spark,file_list):
+  try:
+    schema = get_json_schema()
     schema2 = MapType(StringType(),StringType())
+    files = get_file_list(file_list=file_list)
     df1 = \
       spark.\
         read.\
@@ -116,8 +132,10 @@ if __name__=='__main__':
                 explode('ReadInfosForLanes'))\
     .withColumn('ReadInfosForLanesReadInfosExploded',
                 explode('ReadInfosForLanesExploded.ReadInfos'))\
-    .selectExpr(
-    'Flowcell','RunNumber','RunId',
+    .selectExpr(\
+    'Flowcell',
+    'RunNumber',
+    'RunId',
     'ReadInfosForLanesExploded.LaneNumber as ReadInfosForLanesLaneNumber',
     'ReadInfosForLanesReadInfosExploded.Number as ReadInfosNumber',
     'ReadInfosForLanesReadInfosExploded.NumCycles as ReadInfosNumCycles',
@@ -134,46 +152,46 @@ if __name__=='__main__':
                 explode('ConversionResultsDemuxResultsExplodedRe.IndexMetrics'))\
     .withColumn('ReadMetricsExploded',
                 explode('ConversionResultsDemuxResultsExplodedRe.ReadMetrics'))\
-    .selectExpr(
-        'Flowcell',
-        'RunNumber',
-        'RunId',
-        'ConversionResultsExploded.LaneNumber as LaneNumber',
-        'ConversionResultsExploded.TotalClustersRaw as TotalClustersRaw',
-        'ConversionResultsExploded.TotalClustersPF as TotalClustersPF',
-        'ConversionResultsExploded.Yield as Yield',
-        'ConversionResultsDemuxResultsIndexMetricsExploded.IndexSequence as IndexSequence',
-        'ConversionResultsDemuxResultsIndexMetricsExploded.MismatchCounts[0] as PerfectBarcode',
-        'ConversionResultsDemuxResultsIndexMetricsExploded.MismatchCounts[1] as OneMismatchBarcode',
-        'ConversionResultsDemuxResultsExplodedRe.SampleId as SampleId',
-        'ConversionResultsDemuxResultsExplodedRe.SampleName as SampleName',
-        'ConversionResultsDemuxResultsExplodedRe.NumberReads as PFClusters',
-        'ReadMetricsExploded.ReadNumber as ReadMetricsReadNumber',
-        'ReadMetricsExploded.Yield as ReadMetricsYield',
-        'ReadMetricsExploded.YieldQ30 as ReadMetricsYieldQ30',
-        'ReadMetricsExploded.QualityScoreSum as ReadMetricsQualityScoreSum',
-        'ReadMetricsExploded.TrimmedBases as ReadMetricsTrimmedBases')\
+    .selectExpr(\
+      'Flowcell',
+      'RunNumber',
+      'RunId',
+      'ConversionResultsExploded.LaneNumber as LaneNumber',
+      'ConversionResultsExploded.TotalClustersRaw as TotalClustersRaw',
+      'ConversionResultsExploded.TotalClustersPF as TotalClustersPF',
+      'ConversionResultsExploded.Yield as Yield',
+      'ConversionResultsDemuxResultsIndexMetricsExploded.IndexSequence as IndexSequence',
+      'ConversionResultsDemuxResultsIndexMetricsExploded.MismatchCounts[0] as PerfectBarcode',
+      'ConversionResultsDemuxResultsIndexMetricsExploded.MismatchCounts[1] as OneMismatchBarcode',
+      'ConversionResultsDemuxResultsExplodedRe.SampleId as SampleId',
+      'ConversionResultsDemuxResultsExplodedRe.SampleName as SampleName',
+      'ConversionResultsDemuxResultsExplodedRe.NumberReads as PFClusters',
+      'ReadMetricsExploded.ReadNumber as ReadMetricsReadNumber',
+      'ReadMetricsExploded.Yield as ReadMetricsYield',
+      'ReadMetricsExploded.YieldQ30 as ReadMetricsYieldQ30',
+      'ReadMetricsExploded.QualityScoreSum as ReadMetricsQualityScoreSum',
+      'ReadMetricsExploded.TrimmedBases as ReadMetricsTrimmedBases')\
     .createOrReplaceTempView('ConversionResults')
     df1\
     .withColumn('ConversionResultsExploded',
                 explode('ConversionResults'))\
     .withColumn('ConversionResultsExplodedUndeterminedReadMetricsExploded',
                 explode('ConversionResultsExploded.Undetermined.ReadMetrics'))\
-    .selectExpr(
-        'Flowcell',
-        'RunNumber',
-        'RunId',
-        'ConversionResultsExploded.LaneNumber as LaneNumber',
-        'ConversionResultsExploded.TotalClustersPF as TotalClustersPF',
-        'ConversionResultsExploded.Undetermined.NumberReads as UndeterminedNumberReads',
-        'ConversionResultsExploded.Undetermined.Yield as UndeterminedTotalYield',
-        'ConversionResultsExplodedUndeterminedReadMetricsExploded.Yield as UndeterminedReadYield',
-        'ConversionResultsExplodedUndeterminedReadMetricsExploded.YieldQ30 as UndeterminedReadYieldQ30',
-        'ConversionResultsExplodedUndeterminedReadMetricsExploded.QualityScoreSum as UndeterminedReadQualityScoreSum'
+    .selectExpr(\
+      'Flowcell',
+      'RunNumber',
+      'RunId',
+      'ConversionResultsExploded.LaneNumber as LaneNumber',
+      'ConversionResultsExploded.TotalClustersPF as TotalClustersPF',
+      'ConversionResultsExploded.Undetermined.NumberReads as UndeterminedNumberReads',
+      'ConversionResultsExploded.Undetermined.Yield as UndeterminedTotalYield',
+      'ConversionResultsExplodedUndeterminedReadMetricsExploded.Yield as UndeterminedReadYield',
+      'ConversionResultsExplodedUndeterminedReadMetricsExploded.YieldQ30 as UndeterminedReadYieldQ30',
+      'ConversionResultsExplodedUndeterminedReadMetricsExploded.QualityScoreSum as UndeterminedReadQualityScoreSum'
     )\
     .createOrReplaceTempView('ConversionResultsUndetermined')
     barcode_stats = \
-    spark.sql('''
+      spark.sql('''
         select 
         LaneNumber,
         SampleId,
@@ -190,10 +208,9 @@ if __name__=='__main__':
         ConversionResults
         group by SampleId, LaneNumber
         order by PFClusters DESC
-    ''')\
-    .toPandas().to_html(index=False)
+      ''')
     undetermined_barcode_stats = \
-    spark.sql('''
+      spark.sql('''
         select 
         LaneNumber,
         CAST(sum(UndeterminedNumberReads) /2 as INTEGER) as PFCluster,
@@ -204,18 +221,38 @@ if __name__=='__main__':
         from
         ConversionResultsUndetermined
         group by LaneNumber
-    ''')\
-    .toPandas().to_html(index=False)
-    template_vars = \
-      {"title" : "Merged report",
-       "barcode_stats": barcode_stats,
-       "undetermined_barcode_stats":undetermined_barcode_stats}
-    html_out = template.render(template_vars)
-    template.\
-      stream(title="Merged report",
-             barcode_stats=barcode_stats,
-             undetermined_barcode_stats=undetermined_barcode_stats).\
-      dump(output_report)
+    ''')
+    return barcode_stats, undetermined_barcode_stats
+  except:
+    raise
+
+if __name__=='__main__':
+  try:
+    from pyspark.sql import SparkSession
+    spark = \
+      SparkSession.\
+        builder.\
+        appName('GenerateDemultiplexingReport').\
+        getOrCreate()
+    barcode_stats, undetermined_barcode_stats = \
+      get_demultiplexing_stats_from_json(\
+        spark=spark,
+        file_list=file_list)
+    barcode_stats = \
+      barcode_stats\
+      .toPandas()\
+      .to_html(index=False)
+    undetermined_barcode_stats = \
+      undetermined_barcode_stats\
+      .toPandas()\
+      .to_html(index=False)
+    generateFormattedReport(\
+      template_path=template_path,
+      output_report=output_report,
+      title='Merged Report',
+      barcode_stats=barcode_stats,
+      undetermined_barcode_stats=undetermined_barcode_stats)
+    spark.stop()
 
   except Exception as e:
     print('Got exception {0}'.format(e))
